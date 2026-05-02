@@ -1,110 +1,104 @@
 import os
-import json
-import random
 import logging
+import sqlite3
 from datetime import datetime, timedelta
 
+from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
-    ConversationHandler,
     ContextTypes,
-    filters
-)
-
-# ================= LOGGING =================
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    filters,
 )
 
 # ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN not set")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # https://your-app.onrender.com
 
 ADMIN_ID = 8633049548
 
 VIP_CHANNEL_ID = -1003962643374
-BASIC_CHANNEL_ID = -1003965211730
-PUBLIC_CHANNEL_ID = -1003950150130
 REGISTRY_CHANNEL_ID = -1003834556396
-
-USERS_FILE = "users.json"
 
 PAYBILL = "322372"
 CONTACT = "+254781585319 / +254717434943"
-TIKTOK = "https://tiktok.com/@smartgoldsignals"
 
-BRAND = "🔥💰 PESAMATRIX COPY ENGINE 💰🔥\nPOWERED BY PESAMATRIX"
+BRAND = "🔥💰 PESAMATRIX COPY ENGINE 💰🔥"
 
 PLANS = {"trial": 3, "basic": 7, "vip": 30}
 
-ENTER_CODE = 1
+# ================= LOGGING =================
+logging.basicConfig(level=logging.INFO)
 
-# ================= DATABASE =================
-def load_users():
-    if os.path.exists(USERS_FILE):
-        try:
-            with open(USERS_FILE, "r") as f:
-                return json.load(f)
-        except Exception as e:
-            logging.error(f"Error loading users: {e}")
-    return {}
+# ================= DB (SQLite - NO DATA LOSS) =================
+conn = sqlite3.connect("users.db", check_same_thread=False)
+cur = conn.cursor()
 
-def save_users():
-    with open(USERS_FILE, "w") as f:
-        json.dump(users, f, indent=2)
+cur.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    plan TEXT,
+    expiry TEXT,
+    account TEXT,
+    pending_plan TEXT,
+    mpesa_code TEXT
+)
+""")
+conn.commit()
 
-users = load_users()
+
+def get_user(uid):
+    cur.execute("SELECT * FROM users WHERE id=?", (uid,))
+    row = cur.fetchone()
+    return row
+
 
 def ensure_user(uid):
-    if uid not in users:
-        users[uid] = {
-            "plan": "none",
-            "expiry": "",
-            "account": "PMX" + str(random.randint(100000, 999999))
-        }
-        save_users()
+    if not get_user(uid):
+        cur.execute(
+            "INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)",
+            (uid, "none", "", "PMX" + uid[-6:], "", "")
+        )
+        conn.commit()
 
-def is_active(user):
+
+def update_user(uid, field, value):
+    cur.execute(f"UPDATE users SET {field}=? WHERE id=?", (value, uid))
+    conn.commit()
+
+
+def is_active(expiry):
     try:
-        return datetime.fromisoformat(user["expiry"]) > datetime.now()
+        return datetime.fromisoformat(expiry) > datetime.now()
     except:
         return False
+
+
+# ================= BOT APP =================
+app = Application.builder().token(BOT_TOKEN).build()
 
 # ================= UI =================
 def dashboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💳 Subscribe", callback_data="subscribe")],
         [InlineKeyboardButton("📊 Status", callback_data="status")],
-        [InlineKeyboardButton("💰 Payment", callback_data="payment")],
-        [InlineKeyboardButton("📞 Contact", callback_data="contact")]
+        [InlineKeyboardButton("💰 Payment", callback_data="payment")]
     ])
+
 
 # ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message:
-        return
-
     uid = str(update.effective_user.id)
     ensure_user(uid)
 
-    try:
-        await context.bot.send_message(
-            REGISTRY_CHANNEL_ID,
-            f"🆕 NEW USER\nID: {uid}\nACCOUNT: {users[uid]['account']}"
-        )
-    except Exception as e:
-        logging.warning(f"Registry send failed: {e}")
-
     await update.message.reply_text(
-        f"{BRAND}\n\nWelcome 🔥\n\nAccount: {users[uid]['account']}",
+        f"{BRAND}\nWelcome",
         reply_markup=dashboard()
     )
+
 
 # ================= MENU =================
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -113,149 +107,102 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     uid = str(q.from_user.id)
     ensure_user(uid)
-    user = users[uid]
+
+    cur.execute("SELECT * FROM users WHERE id=?", (uid,))
+    user = cur.fetchone()
 
     if q.data == "subscribe":
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🧪 Trial", callback_data="trial")],
-            [InlineKeyboardButton("💰 Basic", callback_data="basic")],
-            [InlineKeyboardButton("💎 VIP", callback_data="vip")]
+            [InlineKeyboardButton("Trial", callback_data="trial")],
+            [InlineKeyboardButton("Basic", callback_data="basic")],
+            [InlineKeyboardButton("VIP", callback_data="vip")]
         ])
         await q.message.reply_text("Choose plan:", reply_markup=kb)
 
     elif q.data == "status":
-        await q.message.reply_text(
-            f"PLAN: {user['plan']}\n"
-            f"STATUS: {'ACTIVE' if is_active(user) else 'DORMANT'}\n"
-            f"ACCOUNT: {user['account']}"
-        )
+        status = "ACTIVE" if is_active(user[2]) else "DORMANT"
+        await q.message.reply_text(f"PLAN: {user[1]}\nSTATUS: {status}")
 
     elif q.data == "payment":
-        await q.message.reply_text(
-            f"PAYBILL: {PAYBILL}\nACCOUNT: {user['account']}"
-        )
+        await q.message.reply_text(f"PAYBILL: {PAYBILL}")
 
-    elif q.data == "contact":
-        await q.message.reply_text(f"{CONTACT}\n{TIKTOK}")
 
 # ================= PLAN =================
-async def plan_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
     uid = str(q.from_user.id)
-    ensure_user(uid)
 
-    users[uid]["pending_plan"] = q.data
-    save_users()
-
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Confirm Payment", callback_data="confirm")]
-    ])
+    update_user(uid, "pending_plan", q.data)
 
     await q.message.reply_text(
-        f"PAY TO:\n{PAYBILL}\nACCOUNT: {users[uid]['account']}",
-        reply_markup=kb
+        f"Send payment to {PAYBILL}\nThen send M-Pesa code."
     )
 
+
 # ================= PAYMENT =================
-async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-
-    await q.message.reply_text("Send M-Pesa code:")
-    return ENTER_CODE
-
-async def receive_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message:
-        return ConversationHandler.END
-
+async def payment_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     code = update.message.text
 
-    users[uid]["mpesa_code"] = code
-    save_users()
+    update_user(uid, "mpesa_code", code)
 
     await context.bot.send_message(
         ADMIN_ID,
-        f"💰 PAYMENT\nUSER: {uid}\nCODE: {code}\nPLAN: {users[uid].get('pending_plan')}"
+        f"PAYMENT\nUSER: {uid}\nCODE: {code}"
     )
 
-    await update.message.reply_text("⏳ Waiting approval...")
-    return ConversationHandler.END
+    await update.message.reply_text("Waiting approval...")
+
 
 # ================= APPROVE =================
 async def approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
 
-    if not context.args:
-        await update.message.reply_text("Usage: /approve USER_ID")
-        return
-
     uid = context.args[0]
 
-    if uid not in users:
-        await update.message.reply_text("User not found")
-        return
+    cur.execute("SELECT pending_plan FROM users WHERE id=?", (uid,))
+    plan = cur.fetchone()[0] or "basic"
 
-    plan = users[uid].get("pending_plan", "basic")
+    expiry = datetime.now() + timedelta(days=PLANS[plan])
 
-    users[uid]["plan"] = plan
-    users[uid]["expiry"] = (
-        datetime.now() + timedelta(days=PLANS[plan])
-    ).isoformat()
+    update_user(uid, "plan", plan)
+    update_user(uid, "expiry", expiry.isoformat())
 
-    save_users()
+    await context.bot.send_message(uid, "✅ ACTIVATED")
 
-    await context.bot.send_message(uid, f"✅ ACTIVATED {plan.upper()}")
-    await update.message.reply_text("✅ Done")
 
-# ================= SIGNAL =================
-async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
+# ================= HANDLERS =================
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("approve", approve))
 
-    msg = update.message
-    if not msg:
-        return
+app.add_handler(CallbackQueryHandler(menu, pattern="^(subscribe|status|payment)$"))
+app.add_handler(CallbackQueryHandler(plan, pattern="^(trial|basic|vip)$"))
 
-    text = (msg.text or msg.caption or "") + "\n\n" + BRAND
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, payment_code))
 
-    try:
-        if msg.photo:
-            await context.bot.send_photo(VIP_CHANNEL_ID, msg.photo[-1].file_id, caption=text)
-        elif msg.video:
-            await context.bot.send_video(VIP_CHANNEL_ID, msg.video.file_id, caption=text)
-        else:
-            await context.bot.send_message(VIP_CHANNEL_ID, text)
-    except Exception as e:
-        logging.error(f"Signal send error: {e}")
 
-# ================= RUN =================
-def run():
-    app = Application.builder().token(BOT_TOKEN).build()
+# ================= FLASK WEBHOOK =================
+flask_app = Flask(__name__)
 
-    conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(confirm, pattern="^confirm$")],
-        states={
-            ENTER_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_code)]
-        },
-        fallbacks=[]
-    )
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("approve", approve))
+@flask_app.post("/webhook")
+def webhook():
+    update = Update.de_json(request.get_json(), app.bot)
+    app.process_update(update)
+    return "ok"
 
-    app.add_handler(CallbackQueryHandler(menu, pattern="^(subscribe|status|payment|contact)$"))
-    app.add_handler(CallbackQueryHandler(plan_select, pattern="^(trial|basic|vip)$"))
 
-    app.add_handler(conv)
+# ================= START WEBHOOK =================
+async def on_startup():
+    await app.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
 
-    app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO, signal))
-
-    print("🔥 BOT RUNNING...")
-    app.run_polling()
 
 if __name__ == "__main__":
-    run()
+    import asyncio
+
+    asyncio.get_event_loop().run_until_complete(on_startup())
+
+    flask_app.run(host="0.0.0.0", port=10000)
