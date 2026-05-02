@@ -44,9 +44,9 @@ def load_users():
             return {}
     return {}
 
-def save_users(data):
+def save_users():
     with open(USERS_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+        json.dump(users, f, indent=2)
 
 users = load_users()
 
@@ -57,7 +57,7 @@ def ensure_user(uid):
             "expiry": "",
             "account": "PMX" + str(random.randint(100000, 999999))
         }
-        save_users(users)
+        save_users()
 
 def is_active(user):
     try:
@@ -88,12 +88,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
     await update.message.reply_text(
-        f"{BRAND}\n\nWelcome 🔥\n\n"
-        f"🆔 Account: {users[uid]['account']}\n\nChoose:",
+        f"{BRAND}\n\nWelcome 🔥\n\nAccount: {users[uid]['account']}",
         reply_markup=dashboard()
     )
 
-# ================= CALLBACK MENU =================
+# ================= MENU =================
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -108,48 +107,52 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("💰 Basic", callback_data="basic")],
             [InlineKeyboardButton("💎 VIP", callback_data="vip")]
         ])
-        await q.message.reply_text(f"{BRAND}\nChoose plan:", reply_markup=kb)
+        await q.message.reply_text("Choose plan:", reply_markup=kb)
 
     elif q.data == "status":
         await q.message.reply_text(
-            f"{BRAND}\nPLAN: {user['plan']}\n"
+            f"PLAN: {user['plan']}\n"
             f"STATUS: {'ACTIVE' if is_active(user) else 'DORMANT'}\n"
             f"ACCOUNT: {user['account']}"
         )
 
     elif q.data == "payment":
         await q.message.reply_text(
-            f"{BRAND}\nPAYBILL: {PAYBILL}\nACCOUNT: {user['account']}"
+            f"PAYBILL: {PAYBILL}\nACCOUNT: {user['account']}"
         )
 
     elif q.data == "contact":
-        await q.message.reply_text(f"{BRAND}\n{CONTACT}\n{TIKTOK}")
+        await q.message.reply_text(f"{CONTACT}\n{TIKTOK}")
 
 # ================= PLAN SELECT =================
 async def plan_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
+    if q.data not in ["trial", "basic", "vip"]:
+        return  # prevents conflict
+
     uid = str(q.from_user.id)
     ensure_user(uid)
 
     users[uid]["pending_plan"] = q.data
-    save_users(users)
+    save_users()
 
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Confirm Payment", callback_data="confirm")]
     ])
 
     await q.message.reply_text(
-        f"{BRAND}\nPAY TO:\n{PAYBILL}\nACCOUNT: {users[uid]['account']}",
+        f"PAY TO:\n{PAYBILL}\nACCOUNT: {users[uid]['account']}",
         reply_markup=kb
     )
 
-# ================= PAYMENT CONFIRM =================
+# ================= CONFIRM =================
 async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    await q.message.reply_text("📥 Send M-Pesa code:")
+
+    await q.message.reply_text("Send M-Pesa code:")
     return ENTER_CODE
 
 async def receive_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -157,14 +160,14 @@ async def receive_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code = update.message.text
 
     users[uid]["mpesa_code"] = code
-    save_users(users)
+    save_users()
 
     await context.bot.send_message(
         ADMIN_ID,
-        f"💰 PAYMENT\nUSER: {uid}\nCODE: {code}\nPLAN: {users[uid].get('pending_plan')}"
+        f"PAYMENT\nUSER: {uid}\nCODE: {code}\nPLAN: {users[uid].get('pending_plan')}"
     )
 
-    await update.message.reply_text("⏳ Waiting approval...")
+    await update.message.reply_text("Waiting approval...")
     return ConversationHandler.END
 
 # ================= APPROVE =================
@@ -172,12 +175,21 @@ async def approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
 
+    if not context.args:
+        await update.message.reply_text("Usage: /approve USER_ID")
+        return
+
     uid = context.args[0]
+
+    if uid not in users:
+        await update.message.reply_text("User not found")
+        return
+
     plan = users[uid].get("pending_plan", "basic")
 
     users[uid]["plan"] = plan
     users[uid]["expiry"] = (datetime.now() + timedelta(days=PLANS[plan])).isoformat()
-    save_users(users)
+    save_users()
 
     await context.bot.send_message(uid, f"✅ ACTIVATED {plan}")
     await update.message.reply_text("Done")
@@ -190,18 +202,15 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     text = (msg.text or msg.caption or "") + "\n\n" + BRAND
 
-    async def send(target):
-        try:
-            if msg.photo:
-                await context.bot.send_photo(target, msg.photo[-1].file_id, caption=text)
-            elif msg.video:
-                await context.bot.send_video(target, msg.video.file_id, caption=text)
-            else:
-                await context.bot.send_message(target, text)
-        except:
-            pass
-
-    await send(VIP_CHANNEL_ID)
+    try:
+        if msg.photo:
+            await context.bot.send_photo(VIP_CHANNEL_ID, msg.photo[-1].file_id, caption=text)
+        elif msg.video:
+            await context.bot.send_video(VIP_CHANNEL_ID, msg.video.file_id, caption=text)
+        else:
+            await context.bot.send_message(VIP_CHANNEL_ID, text)
+    except:
+        pass
 
 # ================= RUN =================
 def run():
@@ -218,9 +227,10 @@ def run():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("approve", approve))
 
+    app.add_handler(CallbackQueryHandler(menu, pattern="^(subscribe|status|payment|contact)$"))
+    app.add_handler(CallbackQueryHandler(plan_select, pattern="^(trial|basic|vip)$"))
+
     app.add_handler(conv)
-    app.add_handler(CallbackQueryHandler(menu))
-    app.add_handler(CallbackQueryHandler(plan_select))
 
     app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO, signal))
 
