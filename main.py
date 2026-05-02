@@ -1,6 +1,7 @@
 import os
 import json
 import random
+import logging
 from datetime import datetime, timedelta
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -14,8 +15,17 @@ from telegram.ext import (
     filters
 )
 
+# ================= LOGGING =================
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+
 # ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN not set")
+
 ADMIN_ID = 8633049548
 
 VIP_CHANNEL_ID = -1003962643374
@@ -39,9 +49,10 @@ ENTER_CODE = 1
 def load_users():
     if os.path.exists(USERS_FILE):
         try:
-            return json.load(open(USERS_FILE))
-        except:
-            return {}
+            with open(USERS_FILE, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            logging.error(f"Error loading users: {e}")
     return {}
 
 def save_users():
@@ -76,6 +87,9 @@ def dashboard():
 
 # ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+
     uid = str(update.effective_user.id)
     ensure_user(uid)
 
@@ -84,8 +98,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             REGISTRY_CHANNEL_ID,
             f"🆕 NEW USER\nID: {uid}\nACCOUNT: {users[uid]['account']}"
         )
-    except:
-        pass
+    except Exception as e:
+        logging.warning(f"Registry send failed: {e}")
 
     await update.message.reply_text(
         f"{BRAND}\n\nWelcome 🔥\n\nAccount: {users[uid]['account']}",
@@ -124,13 +138,10 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif q.data == "contact":
         await q.message.reply_text(f"{CONTACT}\n{TIKTOK}")
 
-# ================= PLAN SELECT =================
+# ================= PLAN =================
 async def plan_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-
-    if q.data not in ["trial", "basic", "vip"]:
-        return  # prevents conflict
 
     uid = str(q.from_user.id)
     ensure_user(uid)
@@ -147,7 +158,7 @@ async def plan_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=kb
     )
 
-# ================= CONFIRM =================
+# ================= PAYMENT =================
 async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -156,6 +167,9 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ENTER_CODE
 
 async def receive_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return ConversationHandler.END
+
     uid = str(update.effective_user.id)
     code = update.message.text
 
@@ -164,10 +178,10 @@ async def receive_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_message(
         ADMIN_ID,
-        f"PAYMENT\nUSER: {uid}\nCODE: {code}\nPLAN: {users[uid].get('pending_plan')}"
+        f"💰 PAYMENT\nUSER: {uid}\nCODE: {code}\nPLAN: {users[uid].get('pending_plan')}"
     )
 
-    await update.message.reply_text("Waiting approval...")
+    await update.message.reply_text("⏳ Waiting approval...")
     return ConversationHandler.END
 
 # ================= APPROVE =================
@@ -188,11 +202,14 @@ async def approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
     plan = users[uid].get("pending_plan", "basic")
 
     users[uid]["plan"] = plan
-    users[uid]["expiry"] = (datetime.now() + timedelta(days=PLANS[plan])).isoformat()
+    users[uid]["expiry"] = (
+        datetime.now() + timedelta(days=PLANS[plan])
+    ).isoformat()
+
     save_users()
 
-    await context.bot.send_message(uid, f"✅ ACTIVATED {plan}")
-    await update.message.reply_text("Done")
+    await context.bot.send_message(uid, f"✅ ACTIVATED {plan.upper()}")
+    await update.message.reply_text("✅ Done")
 
 # ================= SIGNAL =================
 async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -200,6 +217,9 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     msg = update.message
+    if not msg:
+        return
+
     text = (msg.text or msg.caption or "") + "\n\n" + BRAND
 
     try:
@@ -209,15 +229,15 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_video(VIP_CHANNEL_ID, msg.video.file_id, caption=text)
         else:
             await context.bot.send_message(VIP_CHANNEL_ID, text)
-    except:
-        pass
+    except Exception as e:
+        logging.error(f"Signal send error: {e}")
 
 # ================= RUN =================
 def run():
     app = Application.builder().token(BOT_TOKEN).build()
 
     conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(confirm, pattern="confirm")],
+        entry_points=[CallbackQueryHandler(confirm, pattern="^confirm$")],
         states={
             ENTER_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_code)]
         },
@@ -234,7 +254,7 @@ def run():
 
     app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO, signal))
 
-    print("🔥 BOT RUNNING")
+    print("🔥 BOT RUNNING...")
     app.run_polling()
 
 if __name__ == "__main__":
