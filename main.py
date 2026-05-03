@@ -2,6 +2,7 @@ import os
 import logging
 import sqlite3
 import random
+import asyncio
 from datetime import datetime, timedelta
 
 from flask import Flask, request
@@ -21,22 +22,20 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 ADMIN_ID = 8633049548
 
-VIP_CHANNEL_ID = -1003962643374
+VIP_CHANNEL = -1003962643374
+BASIC_CHANNEL = -1003965211730
+PUBLIC_CHANNEL = -1003950150130
+REGISTRY_CHANNEL = -1003834556396
 
-BRAND = "🔥💰 PESAMATRIX COPY ENGINE 💰🔥"
+# ================= EXPANDED PAIRS =================
+SIGNAL_PAIRS = [
+    "EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "BTCUSD",
+    "AUDUSD", "USDCHF", "USDCAD", "NZDUSD"
+]
 
-PLANS = {
-    "trial": 3,
-    "basic": 7,
-    "vip": 30
-}
-
-SIGNAL_PAIRS = ["EURUSD", "GBPUSD", "BTCUSD", "XAUUSD"]
-
-# ================= LOGGING =================
 logging.basicConfig(level=logging.INFO)
 
-# ================= DB =================
+# ================= DATABASE =================
 conn = sqlite3.connect("users.db", check_same_thread=False)
 cur = conn.cursor()
 
@@ -45,30 +44,23 @@ CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     plan TEXT,
     expiry TEXT,
-    pending_plan TEXT,
-    mpesa_code TEXT
+    account TEXT
 )
 """)
 conn.commit()
 
 
-def get_user(uid):
-    cur.execute("SELECT * FROM users WHERE id=?", (uid,))
-    return cur.fetchone()
-
-
 def ensure_user(uid):
-    if not get_user(uid):
+    if not cur.execute("SELECT id FROM users WHERE id=?", (uid,)).fetchone():
         cur.execute(
-            "INSERT INTO users VALUES (?, ?, ?, ?, ?)",
-            (uid, "none", "", "", "")
+            "INSERT INTO users VALUES (?, ?, ?, ?)",
+            (uid, "none", "", "PMX" + uid[-6:])
         )
         conn.commit()
 
 
-def update_user(uid, field, value):
-    cur.execute(f"UPDATE users SET {field}=? WHERE id=?", (value, uid))
-    conn.commit()
+def get_user(uid):
+    return cur.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
 
 
 def is_active(expiry):
@@ -81,30 +73,74 @@ def is_active(expiry):
 # ================= BOT =================
 app = Application.builder().token(BOT_TOKEN).build()
 
-# ================= UI BUTTONS =================
-def main_menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💳 Subscribe", callback_data="subscribe")],
-        [InlineKeyboardButton("📊 Status", callback_data="status")],
-        [InlineKeyboardButton("📡 Signals", callback_data="signals")],
-        [InlineKeyboardButton("💰 Payment", callback_data="payment")]
-    ])
-
-
-def plan_menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Trial (3d)", callback_data="trial")],
-        [InlineKeyboardButton("Basic (7d)", callback_data="basic")],
-        [InlineKeyboardButton("VIP (30d)", callback_data="vip")]
-    ])
-
-
-# ================= SIGNAL ENGINE =================
+# ================= 🔥 ADVANCED SIGNAL ENGINE =================
 def generate_signal():
     pair = random.choice(SIGNAL_PAIRS)
+
     direction = random.choice(["BUY 📈", "SELL 📉"])
-    confidence = random.randint(70, 95)
-    return f"📡 SIGNAL\nPAIR: {pair}\nACTION: {direction}\nCONFIDENCE: {confidence}%"
+
+    # simulate realistic price range
+    base_price = random.uniform(1.0, 2000.0)
+
+    entry = round(base_price, 5)
+
+    if direction.startswith("BUY"):
+        sl = round(entry - random.uniform(0.5, 2.0), 5)
+        tp1 = round(entry + random.uniform(1.0, 3.0), 5)
+        tp2 = round(entry + random.uniform(3.0, 6.0), 5)
+    else:
+        sl = round(entry + random.uniform(0.5, 2.0), 5)
+        tp1 = round(entry - random.uniform(1.0, 3.0), 5)
+        tp2 = round(entry - random.uniform(3.0, 6.0), 5)
+
+    confidence = random.randint(75, 97)
+
+    return (
+        f"📡 TRADE SIGNAL\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"PAIR: {pair}\n"
+        f"DIRECTION: {direction}\n\n"
+        f"ENTRY: {entry}\n"
+        f"TP1: {tp1}\n"
+        f"TP2: {tp2}\n"
+        f"SL: {sl}\n\n"
+        f"CONFIDENCE: {confidence}%\n"
+        f"━━━━━━━━━━━━━━"
+    )
+
+
+# ================= CHANNEL BROADCAST =================
+async def send_to_channels(text, delay_basic=False):
+    await app.bot.send_message(VIP_CHANNEL, text)
+
+    if delay_basic:
+        await asyncio.sleep(300)
+
+    await app.bot.send_message(BASIC_CHANNEL, text)
+
+
+# ================= MEDIA =================
+async def send_media(file_id, caption, target):
+    targets = {
+        "VIP": VIP_CHANNEL,
+        "BASIC": BASIC_CHANNEL,
+        "PUBLIC": PUBLIC_CHANNEL,
+        "ALL": [VIP_CHANNEL, BASIC_CHANNEL, PUBLIC_CHANNEL]
+    }
+
+    if target == "ALL":
+        for ch in targets["ALL"]:
+            await app.bot.send_photo(ch, file_id, caption=caption)
+    else:
+        await app.bot.send_photo(targets[target], file_id, caption=caption)
+
+
+# ================= SIMPLE UI =================
+def main_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📡 Get Signal", callback_data="signal")],
+        [InlineKeyboardButton("📊 Status", callback_data="status")]
+    ])
 
 
 # ================= COMMANDS =================
@@ -112,97 +148,76 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     ensure_user(uid)
 
+    user = get_user(uid)
+
     await update.message.reply_text(
-        f"{BRAND}\nWelcome to Trading Bot 🚀",
+        f"🔥 TRADING SYSTEM\n\n"
+        f"👤 ACCOUNT: {user[3]}\n"
+        f"📦 PLAN: {user[1]}\n\n"
+        f"Use buttons below",
         reply_markup=main_menu()
     )
 
 
-async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
     uid = str(q.from_user.id)
     ensure_user(uid)
+    user = get_user(uid)
 
-    if q.data == "subscribe":
-        await q.message.reply_text("Choose plan:", reply_markup=plan_menu())
+    if q.data == "signal":
+        if user[1] == "vip":
+            await send_to_channels(generate_signal(), delay_basic=False)
+            await q.message.reply_text("📡 VIP signal sent instantly")
+        elif user[1] == "basic":
+            await send_to_channels(generate_signal(), delay_basic=True)
+            await q.message.reply_text("📡 BASIC signal sent (5 min delay)")
+        else:
+            await q.message.reply_text("❌ Subscribe first")
 
     elif q.data == "status":
-        user = get_user(uid)
-        status = "ACTIVE" if is_active(user[2]) else "DORMANT"
         await q.message.reply_text(
-            f"PLAN: {user[1]}\nSTATUS: {status}\nEXPIRY: {user[2]}"
+            f"PLAN: {user[1]}\nACCOUNT: {user[3]}"
         )
 
-    elif q.data == "payment":
-        await q.message.reply_text(
-            "Send M-Pesa to PAYBILL: 322372\nThen send transaction code."
-        )
 
-    elif q.data == "signals":
-        user = get_user(uid)
-
-        if not is_active(user[2]):
-            await q.message.reply_text("❌ You need active subscription")
-            return
-
-        await q.message.reply_text(generate_signal())
-
-
-async def select_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-
-    uid = str(q.from_user.id)
-    ensure_user(uid)
-
-    update_user(uid, "pending_plan", q.data)
-
-    await q.message.reply_text(
-        f"Send payment to PAYBILL 322372\nThen send M-Pesa code."
-    )
-
-
-async def payment_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = str(update.effective_user.id)
-    code = update.message.text
-
-    update_user(uid, "mpesa_code", code)
-
-    await context.bot.send_message(
-        ADMIN_ID,
-        f"💰 PAYMENT RECEIVED\nUSER: {uid}\nCODE: {code}"
-    )
-
-    await update.message.reply_text("Waiting approval...")
-
-
-async def approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ================= ADMIN SIGNAL =================
+async def admin_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
 
-    uid = context.args[0]
+    signal = generate_signal()
+    await send_to_channels(signal, delay_basic=True)
 
-    cur.execute("SELECT pending_plan FROM users WHERE id=?", (uid,))
-    plan = cur.fetchone()[0]
 
-    expiry = datetime.now() + timedelta(days=PLANS[plan])
+# ================= MEDIA =================
+async def media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
 
-    update_user(uid, "plan", plan)
-    update_user(uid, "expiry", expiry.isoformat())
+    if not update.message.photo:
+        return
 
-    await context.bot.send_message(uid, "✅ Activated VIP access")
+    file_id = update.message.photo[-1].file_id
+    caption = update.message.caption or ""
+
+    if "VIP" in caption:
+        await send_media(file_id, caption, "VIP")
+    elif "BASIC" in caption:
+        await send_media(file_id, caption, "BASIC")
+    elif "PUBLIC" in caption:
+        await send_media(file_id, caption, "PUBLIC")
+    else:
+        await send_media(file_id, caption, "ALL")
 
 
 # ================= HANDLERS =================
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("approve", approve))
-
-app.add_handler(CallbackQueryHandler(handle_buttons, pattern="^(subscribe|status|payment|signals)$"))
-app.add_handler(CallbackQueryHandler(select_plan, pattern="^(trial|basic|vip)$"))
-
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, payment_code))
+app.add_handler(CommandHandler("signal", admin_signal))
+app.add_handler(CallbackQueryHandler(buttons))
+app.add_handler(MessageHandler(filters.PHOTO, media))
 
 
 # ================= FLASK =================
@@ -211,7 +226,7 @@ flask_app = Flask(__name__)
 
 @app.route("/", methods=["GET"])
 def home():
-    return "Bot running"
+    return "Bot Running"
 
 
 @app.route("/webhook", methods=["POST"])
@@ -221,7 +236,7 @@ def webhook():
     return "ok"
 
 
-# ================= START WEBHOOK =================
+# ================= START =================
 async def start_bot():
     await app.initialize()
     await app.start()
@@ -229,8 +244,6 @@ async def start_bot():
 
 
 if __name__ == "__main__":
-    import asyncio
-
     asyncio.get_event_loop().run_until_complete(start_bot())
 
     port = int(os.environ.get("PORT", 10000))
