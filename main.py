@@ -7,9 +7,7 @@ import threading
 from datetime import datetime, timedelta
 
 from flask import Flask, request
-from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, ContextTypes, filters
@@ -42,21 +40,25 @@ CREATE TABLE IF NOT EXISTS users (
     account TEXT,
     plan TEXT,
     status TEXT,
-    expiry TEXT
+    expiry TEXT,
+    ref TEXT DEFAULT '',
+    wins INTEGER DEFAULT 0,
+    losses INTEGER DEFAULT 0
 )
 """)
 conn.commit()
 
-# ================= SIGNAL STATE =================
+# ================= STATE =================
 signal_data = {}
+latest_signal = {}
 
-# ================= DB FUNCTIONS =================
-def ensure_user(uid):
+# ================= DB =================
+def ensure_user(uid, ref=""):
     if not cur.execute("SELECT id FROM users WHERE id=?", (uid,)).fetchone():
         acc = "ACC" + str(random.randint(100000, 999999))
         cur.execute(
-            "INSERT INTO users VALUES (?, ?, ?, ?, ?)",
-            (uid, acc, "none", "registered", "")
+            "INSERT INTO users VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (uid, acc, "none", "active", "", ref, 0, 0)
         )
         conn.commit()
 
@@ -71,36 +73,93 @@ def update_user(uid, plan, status, days):
     )
     conn.commit()
 
+def add_win(uid):
+    cur.execute("UPDATE users SET wins = wins + 1 WHERE id=?", (uid,))
+    conn.commit()
+
+def add_loss(uid):
+    cur.execute("UPDATE users SET losses = losses + 1 WHERE id=?", (uid,))
+    conn.commit()
+
+# ================= CHART GENERATOR =================
+def generate_chart(pair, direction):
+    return f"""
+📈 LIVE CHART ANALYSIS ({pair})
+━━━━━━━━━━━━━━
+Trend: {direction}
+Structure: Market Breakout
+Liquidity Zones: Active
+Momentum: Strong {direction}
+
+███████████████
+█  📊 PRICE MOVE █
+███████████████
+
+📡 Powered by PESAMATRIX
+"""
+
+# ================= SIGNAL FORMAT =================
+def format_signal(pair, direction, entry, tp, sl):
+    return f"""
+📊 {pair} | {direction} SETUP
+━━━━━━━━━━━━━━
+▢ Market Structure Confirmed
+▢ Trend: {direction} Momentum
+▢ Entry: {entry}
+▢ TP1: {tp}
+▢ SL: {sl}
+━━━━━━━━━━━━━━
+📡 Powered by PESAMATRIX
+"""
+
 # ================= MENUS =================
 def user_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💳 Payment", callback_data="payment")],
         [InlineKeyboardButton("📞 Contact", callback_data="contact")],
         [InlineKeyboardButton("📊 Status", callback_data="status")],
-        [InlineKeyboardButton("💰 Confirm", callback_data="confirm")]
+        [InlineKeyboardButton("🏆 Leaderboard", callback_data="leaderboard")],
+        [InlineKeyboardButton("🔗 Referral", callback_data="ref")]
     ])
 
-def admin_menu():
+def signal_buttons():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📡 Send Signal", callback_data="send_signal")]
+        [
+            InlineKeyboardButton("📊 View Signal", callback_data="view_signal"),
+            InlineKeyboardButton("📈 Live Chart", callback_data="chart")
+        ],
+        [
+            InlineKeyboardButton("🏆 Stats", callback_data="stats")
+        ]
     ])
 
 # ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
-    ensure_user(uid)
+    ref = context.args[0] if context.args else ""
+    ensure_user(uid, ref)
+
+    user = get_user(uid)
 
     if update.effective_user.id == ADMIN_ID:
-        await update.message.reply_text("👑 ADMIN", reply_markup=admin_menu())
+        await update.message.reply_text("👑 ADMIN DASHBOARD")
     else:
-        user = get_user(uid)
         await update.message.reply_text(
-            f"ACCOUNT: {user[1]}\nPLAN: {user[2]}",
+f"""
+👋 WELCOME
+
+ACCOUNT: {user[1]}
+PLAN: {user[2]}
+STATUS: {user[3]}
+
+VIP 👑 Instant Signals
+BASIC 📊 Delayed Signals
+""",
             reply_markup=user_menu()
         )
 
-# ================= BUTTONS =================
-async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ================= BUTTON HANDLER =================
+async def signal_ui(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
@@ -108,13 +167,50 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ensure_user(uid)
     user = get_user(uid)
 
-    if q.data == "send_signal":
-        if q.from_user.id != ADMIN_ID:
-            return
-        signal_data[uid] = {"step": "pair"}
-        await q.message.reply_text("Enter PAIR (e.g XAUUSD):")
+    if q.data == "payment":
+        await q.message.reply_text(
+            "💳 PAYBILL: 322372\nACCOUNT: Your Assigned Number"
+        )
 
-# ================= ADMIN INPUT =================
+    elif q.data == "contact":
+        await q.message.reply_text(
+            "📞 +254717434943 / +254781585319\n📱 WhatsApp: +254717434943\n🎵 TikTok: https://tiktok.com/@smartgoldsignals"
+        )
+
+    elif q.data == "leaderboard":
+        top = cur.execute(
+            "SELECT account, wins FROM users ORDER BY wins DESC LIMIT 5"
+        ).fetchall()
+
+        msg = "🏆 VIP LEADERBOARD\n━━━━━━━━━━\n"
+        for t in top:
+            msg += f"{t[0]} — {t[1]} Wins\n"
+
+        await q.message.reply_text(msg)
+
+    elif q.data == "ref":
+        link = f"https://t.me/YourBot?start={uid}"
+        await q.message.reply_text(f"🔗 Referral Link:\n{link}")
+
+    elif q.data == "view_signal":
+        await q.message.reply_text(latest_signal.get("text", "No signal"))
+
+    elif q.data == "chart":
+        await q.message.reply_text(
+            generate_chart(
+                latest_signal.get("pair", "XAUUSD"),
+                latest_signal.get("direction", "N/A")
+            )
+        )
+
+    elif q.data == "stats":
+        wins = cur.execute("SELECT SUM(wins) FROM users").fetchone()[0] or 0
+        losses = cur.execute("SELECT SUM(losses) FROM users").fetchone()[0] or 0
+        await q.message.reply_text(
+            f"🏆 Wins: {wins}\n❌ Losses: {losses}"
+        )
+
+# ================= SIGNAL CREATION =================
 async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -125,77 +221,60 @@ async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     text = update.message.text
-
     step = signal_data[uid]["step"]
 
     if step == "pair":
         signal_data[uid]["pair"] = text.upper()
         signal_data[uid]["step"] = "direction"
-        await update.message.reply_text("Enter Direction (BUY/SELL):")
+        await update.message.reply_text("BUY or SELL:")
 
     elif step == "direction":
         signal_data[uid]["direction"] = text.upper()
         signal_data[uid]["step"] = "entry"
-        await update.message.reply_text("Enter ENTRY:")
+        await update.message.reply_text("ENTRY:")
 
     elif step == "entry":
         signal_data[uid]["entry"] = text
         signal_data[uid]["step"] = "tp"
-        await update.message.reply_text("Enter TP:")
+        await update.message.reply_text("TP:")
 
     elif step == "tp":
         signal_data[uid]["tp"] = text
         signal_data[uid]["step"] = "sl"
-        await update.message.reply_text("Enter SL:")
+        await update.message.reply_text("SL:")
 
     elif step == "sl":
         signal_data[uid]["sl"] = text
 
-        signal = f"""
-📡 TRADE SIGNAL
-━━━━━━━━━━━━
-PAIR: {signal_data[uid]['pair']}
-TYPE: {signal_data[uid]['direction']}
-ENTRY: {signal_data[uid]['entry']}
-TP: {signal_data[uid]['tp']}
-SL: {signal_data[uid]['sl']}
-━━━━━━━━━━━━
-"""
+        signal = format_signal(
+            signal_data[uid]['pair'],
+            signal_data[uid]['direction'],
+            signal_data[uid]['entry'],
+            signal_data[uid]['tp'],
+            signal_data[uid]['sl']
+        )
 
-        # VIP instant
-        await context.bot.send_message(VIP_CHANNEL, signal)
+        latest_signal.update(signal_data[uid])
+        latest_signal["text"] = signal
 
-        # BASIC delayed
-        async def send_basic():
-            await asyncio.sleep(300)
-            await context.bot.send_message(BASIC_CHANNEL, signal)
+        users = cur.execute("SELECT id, plan, status FROM users").fetchall()
 
-        asyncio.create_task(send_basic())
+        for uid_db, plan, status in users:
+            if status != "active":
+                continue
+
+            if plan == "VIP":
+                await context.bot.send_message(uid_db, signal, reply_markup=signal_buttons())
+
+            elif plan == "BASIC":
+                async def delayed(user_id):
+                    await asyncio.sleep(300)
+                    await context.bot.send_message(user_id, signal, reply_markup=signal_buttons())
+
+                asyncio.create_task(delayed(uid_db))
 
         await update.message.reply_text("✅ Signal sent")
-
         del signal_data[uid]
-
-# ================= MEDIA =================
-async def media(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    caption = update.message.caption or ""
-
-    if update.message.photo:
-        file_id = update.message.photo[-1].file_id
-        send = context.bot.send_photo
-    elif update.message.video:
-        file_id = update.message.video.file_id
-        send = context.bot.send_video
-    else:
-        return
-
-    if "VIP" in caption:
-        await send(VIP_CHANNEL, file_id, caption=caption)
-    elif "BASIC" in caption:
-        await send(BASIC_CHANNEL, file_id, caption=caption)
 
 # ================= WEBHOOK =================
 @app.route("/webhook", methods=["POST"])
@@ -226,9 +305,8 @@ asyncio.run_coroutine_threadsafe(startup(), loop)
 
 # ================= HANDLERS =================
 telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(CallbackQueryHandler(buttons))
+telegram_app.add_handler(CallbackQueryHandler(signal_ui))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_input))
-telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO, media))
 
 # ================= RUN =================
 if __name__ == "__main__":
