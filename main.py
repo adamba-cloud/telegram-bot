@@ -26,8 +26,6 @@ BASIC_CHANNEL = -1003965211730
 PUBLIC_CHANNEL = -1003950150130
 REGISTRY_CHANNEL = -1003834556396
 
-SIGNAL_PAIRS = ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "BTCUSD"]
-
 logging.basicConfig(level=logging.INFO)
 
 # ================= APP =================
@@ -48,6 +46,9 @@ CREATE TABLE IF NOT EXISTS users (
 )
 """)
 conn.commit()
+
+# ================= SIGNAL STATE =================
+signal_data = {}
 
 # ================= DB FUNCTIONS =================
 def ensure_user(uid):
@@ -70,25 +71,6 @@ def update_user(uid, plan, status, days):
     )
     conn.commit()
 
-# ================= SIGNAL =================
-def generate_signal():
-    pair = random.choice(SIGNAL_PAIRS)
-    direction = random.choice(["BUY 📈", "SELL 📉"])
-    entry = round(random.uniform(100, 2000), 2)
-    sl = round(entry - random.uniform(10, 30), 2)
-    tp = round(entry + random.uniform(20, 60), 2)
-
-    return f"""
-📡 TRADE SIGNAL
-━━━━━━━━━━━━
-PAIR: {pair}
-TYPE: {direction}
-ENTRY: {entry}
-TP: {tp}
-SL: {sl}
-━━━━━━━━━━━━
-"""
-
 # ================= MENUS =================
 def user_menu():
     return InlineKeyboardMarkup([
@@ -100,19 +82,18 @@ def user_menu():
 
 def admin_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📡 Send Signal", callback_data="send_signal")],
-        [InlineKeyboardButton("📢 Broadcast", callback_data="broadcast")]
+        [InlineKeyboardButton("📡 Send Signal", callback_data="send_signal")]
     ])
 
-# ================= HANDLERS =================
+# ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     ensure_user(uid)
-    user = get_user(uid)
 
     if update.effective_user.id == ADMIN_ID:
-        await update.message.reply_text("👑 ADMIN DASHBOARD", reply_markup=admin_menu())
+        await update.message.reply_text("👑 ADMIN", reply_markup=admin_menu())
     else:
+        user = get_user(uid)
         await update.message.reply_text(
             f"ACCOUNT: {user[1]}\nPLAN: {user[2]}",
             reply_markup=user_menu()
@@ -127,69 +108,73 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ensure_user(uid)
     user = get_user(uid)
 
-    # ===== USER =====
-    if q.data == "payment":
-        await q.message.reply_text(
-            f"Paybill: 322372\nAccount: {user[1]}\n\nVIP: 1500 (30 days)\nBASIC: 500 (7 days)"
-        )
+    if q.data == "send_signal":
+        if q.from_user.id != ADMIN_ID:
+            return
+        signal_data[uid] = {"step": "pair"}
+        await q.message.reply_text("Enter PAIR (e.g XAUUSD):")
 
-    elif q.data == "contact":
-        await q.message.reply_text(
-            "📞 CONTACT\n\n"
-            "+254781585319\n"
-            "+254717434943\n"
-            "TikTok: https://tiktok.com/@smartgoldsignals"
-        )
+# ================= ADMIN INPUT =================
+async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
 
-    elif q.data == "status":
-        await q.message.reply_text(
-            f"PLAN: {user[2]}\nSTATUS: {user[3]}\nEXPIRY: {user[4]}"
-        )
+    uid = str(update.effective_user.id)
 
-    elif q.data == "confirm":
-        await context.bot.send_message(
-            ADMIN_ID,
-            f"💰 PAYMENT REQUEST\nUSER: {uid}\nACCOUNT: {user[1]}",
-            reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("✅ Approve VIP", callback_data=f"approve_vip_{uid}"),
-                    InlineKeyboardButton("❌ Reject", callback_data=f"reject_{uid}")
-                ],
-                [
-                    InlineKeyboardButton("✅ Approve BASIC", callback_data=f"approve_basic_{uid}")
-                ]
-            ])
-        )
-        await q.message.reply_text("Sent to admin")
+    if uid not in signal_data:
+        return
 
-    # ===== ADMIN =====
-    elif q.data == "send_signal":
-        signal = generate_signal()
+    text = update.message.text
+
+    step = signal_data[uid]["step"]
+
+    if step == "pair":
+        signal_data[uid]["pair"] = text.upper()
+        signal_data[uid]["step"] = "direction"
+        await update.message.reply_text("Enter Direction (BUY/SELL):")
+
+    elif step == "direction":
+        signal_data[uid]["direction"] = text.upper()
+        signal_data[uid]["step"] = "entry"
+        await update.message.reply_text("Enter ENTRY:")
+
+    elif step == "entry":
+        signal_data[uid]["entry"] = text
+        signal_data[uid]["step"] = "tp"
+        await update.message.reply_text("Enter TP:")
+
+    elif step == "tp":
+        signal_data[uid]["tp"] = text
+        signal_data[uid]["step"] = "sl"
+        await update.message.reply_text("Enter SL:")
+
+    elif step == "sl":
+        signal_data[uid]["sl"] = text
+
+        signal = f"""
+📡 TRADE SIGNAL
+━━━━━━━━━━━━
+PAIR: {signal_data[uid]['pair']}
+TYPE: {signal_data[uid]['direction']}
+ENTRY: {signal_data[uid]['entry']}
+TP: {signal_data[uid]['tp']}
+SL: {signal_data[uid]['sl']}
+━━━━━━━━━━━━
+"""
+
+        # VIP instant
         await context.bot.send_message(VIP_CHANNEL, signal)
-        await context.bot.send_message(BASIC_CHANNEL, signal)
-        await context.bot.send_message(PUBLIC_CHANNEL, signal)
-        await q.message.reply_text("Signal sent")
 
-    elif q.data.startswith("approve_vip"):
-        user_id = q.data.split("_")[2]
-        update_user(user_id, "VIP", "active", 30)
+        # BASIC delayed
+        async def send_basic():
+            await asyncio.sleep(300)
+            await context.bot.send_message(BASIC_CHANNEL, signal)
 
-        await context.bot.send_message(user_id, "✅ VIP Activated (30 days)")
-        await context.bot.send_message(REGISTRY_CHANNEL, f"VIP USER: {user_id}")
-        await q.message.reply_text("Approved VIP")
+        asyncio.create_task(send_basic())
 
-    elif q.data.startswith("approve_basic"):
-        user_id = q.data.split("_")[2]
-        update_user(user_id, "BASIC", "active", 7)
+        await update.message.reply_text("✅ Signal sent")
 
-        await context.bot.send_message(user_id, "✅ BASIC Activated (7 days)")
-        await context.bot.send_message(REGISTRY_CHANNEL, f"BASIC USER: {user_id}")
-        await q.message.reply_text("Approved BASIC")
-
-    elif q.data.startswith("reject"):
-        user_id = q.data.split("_")[1]
-        await context.bot.send_message(user_id, "❌ Payment rejected")
-        await q.message.reply_text("Rejected")
+        del signal_data[uid]
 
 # ================= MEDIA =================
 async def media(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -211,21 +196,6 @@ async def media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send(VIP_CHANNEL, file_id, caption=caption)
     elif "BASIC" in caption:
         await send(BASIC_CHANNEL, file_id, caption=caption)
-    else:
-        await send(PUBLIC_CHANNEL, file_id, caption=caption)
-
-# ================= AUTO EXPIRY =================
-async def expiry_check():
-    while True:
-        now = datetime.utcnow().strftime("%Y-%m-%d")
-        users = cur.execute("SELECT id, expiry FROM users").fetchall()
-
-        for uid, exp in users:
-            if exp and exp < now:
-                cur.execute("UPDATE users SET plan='none', status='expired' WHERE id=?", (uid,))
-                conn.commit()
-
-        await asyncio.sleep(3600)
 
 # ================= WEBHOOK =================
 @app.route("/webhook", methods=["POST"])
@@ -251,13 +221,13 @@ async def startup():
     await telegram_app.initialize()
     await telegram_app.start()
     await telegram_app.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
-    loop.create_task(expiry_check())
 
 asyncio.run_coroutine_threadsafe(startup(), loop)
 
 # ================= HANDLERS =================
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(CallbackQueryHandler(buttons))
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_input))
 telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO, media))
 
 # ================= RUN =================
