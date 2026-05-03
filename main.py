@@ -52,11 +52,7 @@ conn.commit()
 signal_data = {}
 latest_signal = {}
 
-# ================= FIX: AUTO START ADMIN SIGNAL MODE =================
-def start_signal(uid):
-    signal_data[uid] = {"step": "pair"}
-
-# ================= DB =================
+# ================= USER CREATION (FREE TRIAL) =================
 def ensure_user(uid, ref=""):
     user = cur.execute("SELECT id FROM users WHERE id=?", (uid,)).fetchone()
 
@@ -74,13 +70,6 @@ def get_user(uid):
     return cur.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
 
 # ================= MENUS =================
-def admin_menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📡 Create Signal", callback_data="create_signal")],
-        [InlineKeyboardButton("📊 Analytics", callback_data="admin_stats")],
-        [InlineKeyboardButton("🧪 Test DB", callback_data="test_db")]
-    ])
-
 def user_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💳 Payment", callback_data="payment")],
@@ -88,6 +77,16 @@ def user_menu():
         [InlineKeyboardButton("📊 Status", callback_data="status")],
         [InlineKeyboardButton("🏆 Leaderboard", callback_data="leaderboard")],
         [InlineKeyboardButton("🔗 Referral", callback_data="ref")]
+    ])
+
+def admin_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📡 Create Signal", callback_data="create_signal")],
+        [InlineKeyboardButton("📊 Analytics", callback_data="admin_stats")],
+        [InlineKeyboardButton("🧪 Test DB", callback_data="test_db")],
+        [InlineKeyboardButton("💳 Payment", callback_data="payment")],
+        [InlineKeyboardButton("📞 Contact", callback_data="contact")],
+        [InlineKeyboardButton("📊 Status", callback_data="status")]
     ])
 
 def signal_buttons():
@@ -110,7 +109,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update.effective_user.id == ADMIN_ID:
         await update.message.reply_text(
-            "👑 ADMIN DASHBOARD",
+            "👑 ADMIN DASHBOARD FULL ACCESS",
             reply_markup=admin_menu()
         )
     else:
@@ -122,11 +121,13 @@ ACCOUNT: {user[1]}
 PLAN: {user[2]}
 STATUS: {user[3]}
 EXPIRY: {user[4]}
+
+🎁 4 DAY FREE TRIAL ACTIVE
 """,
             reply_markup=user_menu()
         )
 
-# ================= CALLBACKS (FIXED ALL MISSING FEATURES) =================
+# ================= CALLBACKS =================
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -135,33 +136,21 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ensure_user(uid)
     user = get_user(uid)
 
-    # ✅ FIX: CREATE SIGNAL WORKING
     if q.data == "create_signal" and q.from_user.id == ADMIN_ID:
-        start_signal(uid)
-        await q.message.reply_text("📡 Enter PAIR (e.g XAUUSD):")
+        signal_data[uid] = {"step": "pair"}
+        await q.message.reply_text("📡 Enter PAIR:")
 
-    # 📊 ANALYTICS FIXED
     elif q.data == "admin_stats" and q.from_user.id == ADMIN_ID:
         total = cur.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         active = cur.execute("SELECT COUNT(*) FROM users WHERE status='active'").fetchone()[0]
-        expired = cur.execute("SELECT COUNT(*) FROM users WHERE status='expired'").fetchone()[0]
 
-        await q.message.reply_text(
-            f"""
-📊 ANALYTICS
-━━━━━━━━━━
-TOTAL USERS: {total}
-ACTIVE: {active}
-EXPIRED: {expired}
-"""
-        )
+        await q.message.reply_text(f"📊 USERS\nTOTAL: {total}\nACTIVE: {active}")
 
-    # 🧪 DATABASE TEST FIXED
     elif q.data == "test_db" and q.from_user.id == ADMIN_ID:
-        sample = cur.execute("SELECT id, plan FROM users LIMIT 5").fetchall()
+        rows = cur.execute("SELECT id, plan FROM users LIMIT 5").fetchall()
         msg = "🧪 DATABASE TEST\n━━━━━━━━━━\n"
-        for s in sample:
-            msg += f"{s[0]} | {s[1]}\n"
+        for r in rows:
+            msg += f"{r[0]} | {r[1]}\n"
         await q.message.reply_text(msg)
 
     elif q.data == "payment":
@@ -174,10 +163,14 @@ EXPIRED: {expired}
 
     elif q.data == "status":
         await q.message.reply_text(
-            f"PLAN: {user[2]}\nSTATUS: {user[3]}"
+            f"PLAN: {user[2]}\nSTATUS: {user[3]}\nEXPIRY: {user[4]}"
         )
 
-# ================= SIGNAL CREATION (FIXED FLOW) =================
+    elif q.data == "ref":
+        link = f"https://t.me/YourBot?start={uid}"
+        await q.message.reply_text(f"🔗 Referral:\n{link}")
+
+# ================= SIGNAL CREATION =================
 async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -226,38 +219,61 @@ SL: {signal_data[uid]['sl']}
         latest_signal.update(signal_data[uid])
         latest_signal["text"] = signal
 
+        await context.bot.send_message(REGISTRY_CHANNEL, "🧾 NEW SIGNAL\n\n" + signal)
+
         users = cur.execute("SELECT id, plan, status FROM users").fetchall()
 
         for uid_db, plan, status in users:
             if status != "active":
                 continue
 
-            await context.bot.send_message(uid_db, signal, reply_markup=signal_buttons())
+            if plan == "VIP":
+                await context.bot.send_message(uid_db, signal, reply_markup=signal_buttons())
+
+            elif plan == "BASIC":
+                async def delayed(user_id):
+                    await asyncio.sleep(300)
+                    await context.bot.send_message(user_id, signal, reply_markup=signal_buttons())
+
+                asyncio.create_task(delayed(uid_db))
+
+            elif plan == "TRIAL":
+                await context.bot.send_message(uid_db, signal, reply_markup=signal_buttons())
 
         await update.message.reply_text("✅ Signal sent")
         del signal_data[uid]
 
-# ================= FIX MEDIA (IMAGES + VIDEOS WORKING) =================
-async def media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ================= MEDIA HANDLER (NEW FEATURE ADDED) =================
+async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
 
-    caption = update.message.caption or ""
+    caption = update.message.caption or "📡 MEDIA SIGNAL UPDATE"
 
     target = PUBLIC_CHANNEL
 
-    if "VIP" in caption:
+    if "VIP" in caption.upper():
         target = VIP_CHANNEL
-    elif "BASIC" in caption:
+    elif "BASIC" in caption.upper():
         target = BASIC_CHANNEL
+    elif "REGISTRY" in caption.upper():
+        target = REGISTRY_CHANNEL
 
-    if update.message.photo:
-        file_id = update.message.photo[-1].file_id
-        await context.bot.send_photo(target, file_id, caption=caption)
+    try:
+        if update.message.photo:
+            file_id = update.message.photo[-1].file_id
+            await context.bot.send_photo(target, file_id, caption=caption)
 
-    elif update.message.video:
-        file_id = update.message.video.file_id
-        await context.bot.send_video(target, file_id, caption=caption)
+        elif update.message.video:
+            file_id = update.message.video.file_id
+            await context.bot.send_video(target, file_id, caption=caption)
+
+        elif update.message.document:
+            file_id = update.message.document.file_id
+            await context.bot.send_document(target, file_id, caption=caption)
+
+    except Exception as e:
+        await context.bot.send_message(ADMIN_ID, f"❌ Media error: {e}")
 
 # ================= WEBHOOK =================
 @app.route("/webhook", methods=["POST"])
@@ -290,7 +306,9 @@ asyncio.run_coroutine_threadsafe(startup(), loop)
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(CallbackQueryHandler(buttons))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_input))
-telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO, media))
+
+# ✅ MEDIA HANDLER ADDED (IMPORTANT)
+telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL, media_handler))
 
 # ================= RUN =================
 if __name__ == "__main__":
