@@ -20,6 +20,12 @@ from telegram.ext import (
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
+if not BOT_TOKEN:
+    raise ValueError("❌ BOT_TOKEN is missing in environment variables")
+
+if not WEBHOOK_URL:
+    raise ValueError("❌ WEBHOOK_URL is missing in environment variables")
+
 ADMIN_ID = 8633049548
 
 VIP_CHANNEL = -1003962643374
@@ -77,8 +83,7 @@ def generate_signal():
     pair = random.choice(SIGNAL_PAIRS)
     direction = random.choice(["BUY 📈", "SELL 📉"])
 
-    base_price = random.uniform(1.0, 2000.0)
-    entry = round(base_price, 5)
+    entry = round(random.uniform(1, 2000), 5)
 
     if direction.startswith("BUY"):
         sl = round(entry - random.uniform(0.5, 2.0), 5)
@@ -107,12 +112,16 @@ def generate_signal():
 
 # ================= CHANNELS =================
 async def send_to_channels(text, delay_basic=False):
-    await app.bot.send_message(VIP_CHANNEL, text)
+    try:
+        await app.bot.send_message(VIP_CHANNEL, text)
 
-    if delay_basic:
-        await asyncio.sleep(300)
+        if delay_basic:
+            await asyncio.sleep(300)
 
-    await app.bot.send_message(BASIC_CHANNEL, text)
+        await app.bot.send_message(BASIC_CHANNEL, text)
+
+    except Exception as e:
+        logging.error(f"Channel error: {e}")
 
 
 # ================= MEDIA =================
@@ -124,11 +133,14 @@ async def send_media(file_id, caption, target):
         "ALL": [VIP_CHANNEL, BASIC_CHANNEL, PUBLIC_CHANNEL]
     }
 
-    if target == "ALL":
-        for ch in targets["ALL"]:
-            await app.bot.send_photo(ch, file_id, caption=caption)
-    else:
-        await app.bot.send_photo(targets[target], file_id, caption=caption)
+    try:
+        if target == "ALL":
+            for ch in targets["ALL"]:
+                await app.bot.send_photo(ch, file_id, caption=caption)
+        else:
+            await app.bot.send_photo(targets[target], file_id, caption=caption)
+    except Exception as e:
+        logging.error(f"Media error: {e}")
 
 
 # ================= UI =================
@@ -143,6 +155,7 @@ def main_menu():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     ensure_user(uid)
+
     user = get_user(uid)
 
     await update.message.reply_text(
@@ -224,11 +237,17 @@ def home():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    data = request.get_json(force=True)
-    update = Update.de_json(data, app.bot)
+    try:
+        data = request.get_json(force=True)
+        update = Update.de_json(data, app.bot)
 
-    # ✅ FIX: proper async execution (NO update_queue)
-    app.create_task(app.process_update(update))
+        # FIXED: safe async execution
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(app.process_update(update))
+
+    except Exception as e:
+        logging.error(f"Webhook error: {e}")
 
     return "ok"
 
@@ -237,16 +256,11 @@ def webhook():
 async def start_bot():
     await app.initialize()
     await app.start()
-
-    await app.bot.set_webhook(
-        url=f"{WEBHOOK_URL}/webhook"
-    )
+    await app.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
 
 
 if __name__ == "__main__":
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(start_bot())
+    asyncio.get_event_loop().run_until_complete(start_bot())
 
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host="0.0.0.0", port=port)
