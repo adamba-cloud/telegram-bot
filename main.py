@@ -21,10 +21,10 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN missing")
+    raise ValueError("BOT_TOKEN")
 
 if not WEBHOOK_URL:
-    raise ValueError("❌ WEBHOOK_URL missing")
+    raise ValueError("WEBHOOK_URL")
 
 ADMIN_ID = 8633049548
 
@@ -241,9 +241,8 @@ def webhook():
         data = request.get_json(force=True)
         update = Update.de_json(data, telegram_app.bot)
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(telegram_app.process_update(update))
+        # SAFE async execution (FIXED)
+        asyncio.run(telegram_app.process_update(update))
 
     except Exception as e:
         logging.error(f"Webhook error: {e}")
@@ -251,15 +250,22 @@ def webhook():
     return "ok"
 
 
-# ================= START =================
+# ================= STARTUP (FIXED FOR RENDER) =================
 async def start_bot():
     await telegram_app.initialize()
     await telegram_app.start()
-    await telegram_app.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
+    await telegram_app.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
+    logging.info("Bot started successfully")
+
+
+def main():
+    # start telegram bot first
+    asyncio.run(start_bot())
+
+    # then flask
+    port = int(os.environ.get("PORT", 10000))
+    flask_app.run(host="0.0.0.0", port=port)
 
 
 if __name__ == "__main__":
-    asyncio.get_event_loop().run_until_complete(start_bot())
-
-    port = int(os.environ.get("PORT", 10000))
-    flask_app.run(host="0.0.0.0", port=port)
+    main()
