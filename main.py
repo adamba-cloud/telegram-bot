@@ -3,7 +3,7 @@ import logging
 import sqlite3
 import random
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -27,7 +27,6 @@ BASIC_CHANNEL = -1003965211730
 PUBLIC_CHANNEL = -1003950150130
 REGISTRY_CHANNEL = -1003834556396
 
-# ================= EXPANDED PAIRS =================
 SIGNAL_PAIRS = [
     "EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "BTCUSD",
     "AUDUSD", "USDCHF", "USDCAD", "NZDUSD"
@@ -73,15 +72,12 @@ def is_active(expiry):
 # ================= BOT =================
 app = Application.builder().token(BOT_TOKEN).build()
 
-# ================= 🔥 ADVANCED SIGNAL ENGINE =================
+# ================= SIGNAL ENGINE =================
 def generate_signal():
     pair = random.choice(SIGNAL_PAIRS)
-
     direction = random.choice(["BUY 📈", "SELL 📉"])
 
-    # simulate realistic price range
     base_price = random.uniform(1.0, 2000.0)
-
     entry = round(base_price, 5)
 
     if direction.startswith("BUY"):
@@ -109,7 +105,7 @@ def generate_signal():
     )
 
 
-# ================= CHANNEL BROADCAST =================
+# ================= CHANNELS =================
 async def send_to_channels(text, delay_basic=False):
     await app.bot.send_message(VIP_CHANNEL, text)
 
@@ -135,7 +131,7 @@ async def send_media(file_id, caption, target):
         await app.bot.send_photo(targets[target], file_id, caption=caption)
 
 
-# ================= SIMPLE UI =================
+# ================= UI =================
 def main_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📡 Get Signal", callback_data="signal")],
@@ -147,14 +143,12 @@ def main_menu():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     ensure_user(uid)
-
     user = get_user(uid)
 
     await update.message.reply_text(
         f"🔥 TRADING SYSTEM\n\n"
         f"👤 ACCOUNT: {user[3]}\n"
-        f"📦 PLAN: {user[1]}\n\n"
-        f"Use buttons below",
+        f"📦 PLAN: {user[1]}",
         reply_markup=main_menu()
     )
 
@@ -170,10 +164,10 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if q.data == "signal":
         if user[1] == "vip":
             await send_to_channels(generate_signal(), delay_basic=False)
-            await q.message.reply_text("📡 VIP signal sent instantly")
+            await q.message.reply_text("📡 VIP signal sent")
         elif user[1] == "basic":
             await send_to_channels(generate_signal(), delay_basic=True)
-            await q.message.reply_text("📡 BASIC signal sent (5 min delay)")
+            await q.message.reply_text("📡 BASIC signal (delayed)")
         else:
             await q.message.reply_text("❌ Subscribe first")
 
@@ -188,8 +182,7 @@ async def admin_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
 
-    signal = generate_signal()
-    await send_to_channels(signal, delay_basic=True)
+    await send_to_channels(generate_signal(), delay_basic=True)
 
 
 # ================= MEDIA =================
@@ -220,7 +213,7 @@ app.add_handler(CallbackQueryHandler(buttons))
 app.add_handler(MessageHandler(filters.PHOTO, media))
 
 
-# ================= FLASK =================
+# ================= FLASK WEBHOOK (FIXED) =================
 flask_app = Flask(__name__)
 
 
@@ -231,8 +224,12 @@ def home():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    update = Update.de_json(request.get_json(), app.bot)
-    app.update_queue.put(update)
+    data = request.get_json(force=True)
+    update = Update.de_json(data, app.bot)
+
+    # ✅ FIX: proper async execution (NO update_queue)
+    app.create_task(app.process_update(update))
+
     return "ok"
 
 
@@ -240,11 +237,16 @@ def webhook():
 async def start_bot():
     await app.initialize()
     await app.start()
-    await app.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
+
+    await app.bot.set_webhook(
+        url=f"{WEBHOOK_URL}/webhook"
+    )
 
 
 if __name__ == "__main__":
-    asyncio.get_event_loop().run_until_complete(start_bot())
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(start_bot())
 
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host="0.0.0.0", port=port)
