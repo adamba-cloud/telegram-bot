@@ -54,11 +54,17 @@ latest_signal = {}
 
 # ================= DB =================
 def ensure_user(uid, ref=""):
-    if not cur.execute("SELECT id FROM users WHERE id=?", (uid,)).fetchone():
+    user = cur.execute("SELECT id FROM users WHERE id=?", (uid,)).fetchone()
+
+    if not user:
         acc = "ACC" + str(random.randint(100000, 999999))
+
+        # 🎁 4 DAY FREE TRIAL
+        expiry = (datetime.utcnow() + timedelta(days=4)).strftime("%Y-%m-%d")
+
         cur.execute(
             "INSERT INTO users VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (uid, acc, "none", "active", "", ref, 0, 0)
+            (uid, acc, "TRIAL", "active", expiry, ref, 0, 0)
         )
         conn.commit()
 
@@ -73,46 +79,15 @@ def update_user(uid, plan, status, days):
     )
     conn.commit()
 
-def add_win(uid):
-    cur.execute("UPDATE users SET wins = wins + 1 WHERE id=?", (uid,))
-    conn.commit()
+# ================= ADMIN DASHBOARD =================
+def admin_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📡 Create Signal", callback_data="create_signal")],
+        [InlineKeyboardButton("📊 Analytics", callback_data="admin_stats")],
+        [InlineKeyboardButton("👥 Users", callback_data="admin_users")]
+    ])
 
-def add_loss(uid):
-    cur.execute("UPDATE users SET losses = losses + 1 WHERE id=?", (uid,))
-    conn.commit()
-
-# ================= CHART GENERATOR =================
-def generate_chart(pair, direction):
-    return f"""
-📈 LIVE CHART ANALYSIS ({pair})
-━━━━━━━━━━━━━━
-Trend: {direction}
-Structure: Market Breakout
-Liquidity Zones: Active
-Momentum: Strong {direction}
-
-███████████████
-█  📊 PRICE MOVE █
-███████████████
-
-📡 Powered by PESAMATRIX
-"""
-
-# ================= SIGNAL FORMAT =================
-def format_signal(pair, direction, entry, tp, sl):
-    return f"""
-📊 {pair} | {direction} SETUP
-━━━━━━━━━━━━━━
-▢ Market Structure Confirmed
-▢ Trend: {direction} Momentum
-▢ Entry: {entry}
-▢ TP1: {tp}
-▢ SL: {sl}
-━━━━━━━━━━━━━━
-📡 Powered by PESAMATRIX
-"""
-
-# ================= MENUS =================
+# ================= USER MENU =================
 def user_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💳 Payment", callback_data="payment")],
@@ -126,7 +101,7 @@ def signal_buttons():
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("📊 View Signal", callback_data="view_signal"),
-            InlineKeyboardButton("📈 Live Chart", callback_data="chart")
+            InlineKeyboardButton("📈 Chart", callback_data="chart")
         ],
         [
             InlineKeyboardButton("🏆 Stats", callback_data="stats")
@@ -136,13 +111,15 @@ def signal_buttons():
 # ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
-    ref = context.args[0] if context.args else ""
-    ensure_user(uid, ref)
+    ensure_user(uid)
 
     user = get_user(uid)
 
     if update.effective_user.id == ADMIN_ID:
-        await update.message.reply_text("👑 ADMIN DASHBOARD")
+        await update.message.reply_text(
+            "👑 ADMIN DASHBOARD\nFull Control Enabled",
+            reply_markup=admin_menu()
+        )
     else:
         await update.message.reply_text(
 f"""
@@ -151,6 +128,9 @@ f"""
 ACCOUNT: {user[1]}
 PLAN: {user[2]}
 STATUS: {user[3]}
+EXPIRY: {user[4]}
+
+🎁 4 DAYS FREE TRIAL ACTIVE
 
 VIP 👑 Instant Signals
 BASIC 📊 Delayed Signals
@@ -158,8 +138,8 @@ BASIC 📊 Delayed Signals
             reply_markup=user_menu()
         )
 
-# ================= BUTTON HANDLER =================
-async def signal_ui(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ================= CALLBACKS =================
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
@@ -167,48 +147,35 @@ async def signal_ui(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ensure_user(uid)
     user = get_user(uid)
 
-    if q.data == "payment":
-        await q.message.reply_text(
-            "💳 PAYBILL: 322372\nACCOUNT: Your Assigned Number"
-        )
+    # ===== ADMIN TOOLS =====
+    if q.data == "admin_stats" and q.from_user.id == ADMIN_ID:
+        total = cur.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        await q.message.reply_text(f"📊 TOTAL USERS: {total}")
+
+    elif q.data == "admin_users" and q.from_user.id == ADMIN_ID:
+        users = cur.execute("SELECT id, plan, status FROM users LIMIT 10").fetchall()
+        msg = "👥 USERS SAMPLE\n━━━━━━━━━━\n"
+        for u in users:
+            msg += f"{u[0]} | {u[1]} | {u[2]}\n"
+        await q.message.reply_text(msg)
+
+    # ===== USER ACTIONS =====
+    elif q.data == "payment":
+        await q.message.reply_text("💳 PAYBILL: 322372\nACCOUNT: Assigned Number")
 
     elif q.data == "contact":
         await q.message.reply_text(
-            "📞 +254717434943 / +254781585319\n📱 WhatsApp: +254717434943\n🎵 TikTok: https://tiktok.com/@smartgoldsignals"
+            "📞 +254717434943 / +254781585319\nWhatsApp: +254717434943\nTikTok: smartgoldsignals"
         )
 
-    elif q.data == "leaderboard":
-        top = cur.execute(
-            "SELECT account, wins FROM users ORDER BY wins DESC LIMIT 5"
-        ).fetchall()
-
-        msg = "🏆 VIP LEADERBOARD\n━━━━━━━━━━\n"
-        for t in top:
-            msg += f"{t[0]} — {t[1]} Wins\n"
-
-        await q.message.reply_text(msg)
+    elif q.data == "status":
+        await q.message.reply_text(
+            f"PLAN: {user[2]}\nSTATUS: {user[3]}\nEXPIRY: {user[4]}"
+        )
 
     elif q.data == "ref":
         link = f"https://t.me/YourBot?start={uid}"
         await q.message.reply_text(f"🔗 Referral Link:\n{link}")
-
-    elif q.data == "view_signal":
-        await q.message.reply_text(latest_signal.get("text", "No signal"))
-
-    elif q.data == "chart":
-        await q.message.reply_text(
-            generate_chart(
-                latest_signal.get("pair", "XAUUSD"),
-                latest_signal.get("direction", "N/A")
-            )
-        )
-
-    elif q.data == "stats":
-        wins = cur.execute("SELECT SUM(wins) FROM users").fetchone()[0] or 0
-        losses = cur.execute("SELECT SUM(losses) FROM users").fetchone()[0] or 0
-        await q.message.reply_text(
-            f"🏆 Wins: {wins}\n❌ Losses: {losses}"
-        )
 
 # ================= SIGNAL CREATION =================
 async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -246,35 +213,53 @@ async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
     elif step == "sl":
         signal_data[uid]["sl"] = text
 
-        signal = format_signal(
-            signal_data[uid]['pair'],
-            signal_data[uid]['direction'],
-            signal_data[uid]['entry'],
-            signal_data[uid]['tp'],
-            signal_data[uid]['sl']
-        )
-
-        latest_signal.update(signal_data[uid])
-        latest_signal["text"] = signal
+        signal = f"""
+📊 {signal_data[uid]['pair']} | {signal_data[uid]['direction']} SETUP
+━━━━━━━━━━━━━━
+▢ Market Structure Confirmed
+▢ Entry: {signal_data[uid]['entry']}
+▢ TP: {signal_data[uid]['tp']}
+▢ SL: {signal_data[uid]['sl']}
+━━━━━━━━━━━━━━
+📡 Powered by PESAMATRIX
+"""
 
         users = cur.execute("SELECT id, plan, status FROM users").fetchall()
 
         for uid_db, plan, status in users:
+
+            # ❗ BLOCK EXPIRED USERS
             if status != "active":
                 continue
 
-            if plan == "VIP":
+            if plan in ["VIP", "TRIAL"]:
                 await context.bot.send_message(uid_db, signal, reply_markup=signal_buttons())
 
             elif plan == "BASIC":
-                async def delayed(user_id):
+                async def delayed(uid_db):
                     await asyncio.sleep(300)
-                    await context.bot.send_message(user_id, signal, reply_markup=signal_buttons())
+                    await context.bot.send_message(uid_db, signal, reply_markup=signal_buttons())
 
                 asyncio.create_task(delayed(uid_db))
 
         await update.message.reply_text("✅ Signal sent")
         del signal_data[uid]
+
+# ================= EXPIRY AUTO CHECK =================
+async def expiry_checker():
+    while True:
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        users = cur.execute("SELECT id, expiry FROM users").fetchall()
+
+        for uid, exp in users:
+            if exp and exp < today:
+                cur.execute(
+                    "UPDATE users SET status='expired', plan='none' WHERE id=?",
+                    (uid,)
+                )
+                conn.commit()
+
+        await asyncio.sleep(3600)
 
 # ================= WEBHOOK =================
 @app.route("/webhook", methods=["POST"])
@@ -301,11 +286,13 @@ async def startup():
     await telegram_app.start()
     await telegram_app.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
 
+    loop.create_task(expiry_checker())
+
 asyncio.run_coroutine_threadsafe(startup(), loop)
 
 # ================= HANDLERS =================
 telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(CallbackQueryHandler(signal_ui))
+telegram_app.add_handler(CallbackQueryHandler(buttons))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_input))
 
 # ================= RUN =================
