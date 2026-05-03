@@ -21,10 +21,10 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN is missing in environment variables")
+    raise ValueError("❌ BOT_TOKEN missing")
 
 if not WEBHOOK_URL:
-    raise ValueError("❌ WEBHOOK_URL is missing in environment variables")
+    raise ValueError("❌ WEBHOOK_URL missing")
 
 ADMIN_ID = 8633049548
 
@@ -75,8 +75,8 @@ def is_active(expiry):
         return False
 
 
-# ================= BOT =================
-app = Application.builder().token(BOT_TOKEN).build()
+# ================= TELEGRAM APP =================
+telegram_app = Application.builder().token(BOT_TOKEN).build()
 
 # ================= SIGNAL ENGINE =================
 def generate_signal():
@@ -110,15 +110,15 @@ def generate_signal():
     )
 
 
-# ================= CHANNELS =================
+# ================= CHANNEL SENDER =================
 async def send_to_channels(text, delay_basic=False):
     try:
-        await app.bot.send_message(VIP_CHANNEL, text)
+        await telegram_app.bot.send_message(VIP_CHANNEL, text)
 
         if delay_basic:
             await asyncio.sleep(300)
 
-        await app.bot.send_message(BASIC_CHANNEL, text)
+        await telegram_app.bot.send_message(BASIC_CHANNEL, text)
 
     except Exception as e:
         logging.error(f"Channel error: {e}")
@@ -136,9 +136,9 @@ async def send_media(file_id, caption, target):
     try:
         if target == "ALL":
             for ch in targets["ALL"]:
-                await app.bot.send_photo(ch, file_id, caption=caption)
+                await telegram_app.bot.send_photo(ch, file_id, caption=caption)
         else:
-            await app.bot.send_photo(targets[target], file_id, caption=caption)
+            await telegram_app.bot.send_photo(targets[target], file_id, caption=caption)
     except Exception as e:
         logging.error(f"Media error: {e}")
 
@@ -190,7 +190,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# ================= ADMIN SIGNAL =================
+# ================= ADMIN =================
 async def admin_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -198,7 +198,7 @@ async def admin_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_to_channels(generate_signal(), delay_basic=True)
 
 
-# ================= MEDIA =================
+# ================= MEDIA HANDLER =================
 async def media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -220,31 +220,30 @@ async def media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ================= HANDLERS =================
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("signal", admin_signal))
-app.add_handler(CallbackQueryHandler(buttons))
-app.add_handler(MessageHandler(filters.PHOTO, media))
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(CommandHandler("signal", admin_signal))
+telegram_app.add_handler(CallbackQueryHandler(buttons))
+telegram_app.add_handler(MessageHandler(filters.PHOTO, media))
 
 
-# ================= FLASK WEBHOOK (FIXED) =================
+# ================= FLASK =================
 flask_app = Flask(__name__)
 
 
-@app.route("/", methods=["GET"])
+@flask_app.route("/", methods=["GET"])
 def home():
     return "Bot Running"
 
 
-@app.route("/webhook", methods=["POST"])
+@flask_app.route("/webhook", methods=["POST"])
 def webhook():
     try:
         data = request.get_json(force=True)
-        update = Update.de_json(data, app.bot)
+        update = Update.de_json(data, telegram_app.bot)
 
-        # FIXED: safe async execution
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(app.process_update(update))
+        loop.run_until_complete(telegram_app.process_update(update))
 
     except Exception as e:
         logging.error(f"Webhook error: {e}")
@@ -254,9 +253,9 @@ def webhook():
 
 # ================= START =================
 async def start_bot():
-    await app.initialize()
-    await app.start()
-    await app.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
+    await telegram_app.initialize()
+    await telegram_app.start()
+    await telegram_app.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
 
 
 if __name__ == "__main__":
