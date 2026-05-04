@@ -6,7 +6,7 @@ import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
-    MessageHandler, ContextTypes, filters
+    ContextTypes
 )
 
 # ================= CONFIG =================
@@ -78,7 +78,11 @@ Choose an option below:
 # ================= SIGNAL =================
 async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        res = requests.get(f"{WEB_APP_URL}/ai-signal")
+        if not WEB_APP_URL:
+            await update.message.reply_text("⚠️ Backend URL not set")
+            return
+
+        res = requests.get(f"{WEB_APP_URL}/ai-signal", timeout=10)
         data = res.json()
 
         msg = f"""
@@ -105,11 +109,12 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ensure_user(uid)
     user = get_user(uid)
 
-    if q.data == "signal":
-        await signal(update, context)
+    try:
+        if q.data == "signal":
+            await signal(update, context)
 
-    elif q.data == "payment":
-        await q.message.reply_text("""
+        elif q.data == "payment":
+            await q.message.reply_text("""
 💳 PAYMENT DETAILS
 
 PAYBILL: 322372
@@ -118,8 +123,8 @@ ACCOUNT: PESAMATRIX
 Send proof to admin after payment.
 """)
 
-    elif q.data == "contact":
-        await q.message.reply_text("""
+        elif q.data == "contact":
+            await q.message.reply_text("""
 📞 CONTACTS
 
 +254717434943
@@ -127,22 +132,25 @@ Send proof to admin after payment.
 WhatsApp: +254717434943
 """)
 
-    elif q.data == "status":
-        await q.message.reply_text(f"""
+        elif q.data == "status":
+            await q.message.reply_text(f"""
 📊 YOUR STATUS
 
 PLAN: {user[1]}
 STATUS: {user[2]}
 """)
 
+    except Exception as e:
+        await q.message.reply_text(f"Error: {e}")
+
 # ================= ADMIN =================
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
 
-    await update.message.reply_text("Admin panel active. Use /signal to test backend.")
+    await update.message.reply_text("Admin active. Backend connected.")
 
-# ================= HANDLERS =================
+# ================= MAIN =================
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
 
@@ -152,7 +160,8 @@ def main():
     application.add_handler(CallbackQueryHandler(buttons))
 
     print("🤖 Bot is running...")
-    application.run_polling()
+
+    application.run_polling(drop_pending_updates=True)
 
 # ================= RUN =================
 if __name__ == "__main__":
