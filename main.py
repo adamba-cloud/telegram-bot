@@ -6,7 +6,7 @@ import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
-    ContextTypes
+    MessageHandler, ContextTypes, filters
 )
 
 # ================= CONFIG =================
@@ -46,7 +46,7 @@ def ensure_user(uid):
 def get_user(uid):
     return cur.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
 
-# ================= MENU =================
+# ================= UI =================
 def main_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Signal", callback_data="signal")],
@@ -59,7 +59,6 @@ def main_menu():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     ensure_user(uid)
-
     user = get_user(uid)
 
     await update.message.reply_text(
@@ -75,12 +74,11 @@ Choose an option below:
         reply_markup=main_menu()
     )
 
-# ================= SIGNAL =================
+# ================= SIGNAL (BACKEND) =================
 async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if not WEB_APP_URL:
-            await update.message.reply_text("⚠️ Backend URL not set")
-            return
+            return await update.message.reply_text("⚠️ WEB_APP_URL not set")
 
         res = requests.get(f"{WEB_APP_URL}/ai-signal", timeout=10)
         data = res.json()
@@ -98,7 +96,7 @@ SL: {data['sl']}
         await update.message.reply_text(msg)
 
     except Exception as e:
-        await update.message.reply_text(f"⚠️ Backend Error: {e}")
+        await update.message.reply_text(f"⚠️ Backend error: {e}")
 
 # ================= CALLBACKS =================
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -109,46 +107,29 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ensure_user(uid)
     user = get_user(uid)
 
-    try:
-        if q.data == "signal":
-            await signal(update, context)
+    if q.data == "signal":
+        await signal(update, context)
 
-        elif q.data == "payment":
-            await q.message.reply_text("""
-💳 PAYMENT DETAILS
+    elif q.data == "payment":
+        await q.message.reply_text(
+            "💳 PAYBILL: 322372\nACCOUNT: PESAMATRIX"
+        )
 
-PAYBILL: 322372
-ACCOUNT: PESAMATRIX
+    elif q.data == "contact":
+        await q.message.reply_text(
+            "📞 +254717434943\nWhatsApp: +254717434943"
+        )
 
-Send proof to admin after payment.
-""")
-
-        elif q.data == "contact":
-            await q.message.reply_text("""
-📞 CONTACTS
-
-+254717434943
-+254781585319
-WhatsApp: +254717434943
-""")
-
-        elif q.data == "status":
-            await q.message.reply_text(f"""
-📊 YOUR STATUS
-
-PLAN: {user[1]}
-STATUS: {user[2]}
-""")
-
-    except Exception as e:
-        await q.message.reply_text(f"Error: {e}")
+    elif q.data == "status":
+        await q.message.reply_text(
+            f"PLAN: {user[1]}\nSTATUS: {user[2]}"
+        )
 
 # ================= ADMIN =================
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-
-    await update.message.reply_text("Admin active. Backend connected.")
+    await update.message.reply_text("Admin active. Use /signal")
 
 # ================= MAIN =================
 def main():
@@ -159,9 +140,8 @@ def main():
     application.add_handler(CommandHandler("admin", admin))
     application.add_handler(CallbackQueryHandler(buttons))
 
-    print("🤖 Bot is running...")
-
-    application.run_polling(drop_pending_updates=True)
+    print("🤖 Bot running (polling mode)...")
+    application.run_polling()
 
 # ================= RUN =================
 if __name__ == "__main__":
