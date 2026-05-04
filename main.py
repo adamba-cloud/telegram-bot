@@ -1,10 +1,8 @@
 import os
 import logging
 import sqlite3
-import random
 import requests
 
-from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -22,10 +20,6 @@ logging.basicConfig(level=logging.INFO)
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN missing")
 
-# ================= FLASK =================
-app = Flask(__name__)
-telegram_app = Application.builder().token(BOT_TOKEN).build()
-
 # ================= DATABASE =================
 conn = sqlite3.connect("users.db", check_same_thread=False)
 cur = conn.cursor()
@@ -39,7 +33,7 @@ CREATE TABLE IF NOT EXISTS users (
 """)
 conn.commit()
 
-# ================= USER HELPERS =================
+# ================= HELPERS =================
 def ensure_user(uid):
     user = cur.execute("SELECT id FROM users WHERE id=?", (uid,)).fetchone()
     if not user:
@@ -52,7 +46,7 @@ def ensure_user(uid):
 def get_user(uid):
     return cur.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
 
-# ================= KEYBOARDS =================
+# ================= MENU =================
 def main_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Signal", callback_data="signal")],
@@ -81,7 +75,7 @@ Choose an option below:
         reply_markup=main_menu()
     )
 
-# ================= SIGNAL (BACKEND CONNECTED) =================
+# ================= SIGNAL =================
 async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         res = requests.get(f"{WEB_APP_URL}/ai-signal")
@@ -100,7 +94,7 @@ SL: {data['sl']}
         await update.message.reply_text(msg)
 
     except Exception as e:
-        await update.message.reply_text(f"⚠️ Error: {e}")
+        await update.message.reply_text(f"⚠️ Backend Error: {e}")
 
 # ================= CALLBACKS =================
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -121,7 +115,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 PAYBILL: 322372
 ACCOUNT: PESAMATRIX
 
-After payment send screenshot to admin.
+Send proof to admin after payment.
 """)
 
     elif q.data == "contact":
@@ -141,33 +135,25 @@ PLAN: {user[1]}
 STATUS: {user[2]}
 """)
 
-# ================= ADMIN SIGNAL TEST =================
-async def admin_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ================= ADMIN =================
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
 
-    await update.message.reply_text("Admin: Use /signal to test backend feed")
-
-# ================= MEDIA HANDLER =================
-async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    await update.message.reply_text("📡 Media received")
+    await update.message.reply_text("Admin panel active. Use /signal to test backend.")
 
 # ================= HANDLERS =================
-telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(CommandHandler("signal", signal))
-telegram_app.add_handler(CommandHandler("admin", admin_signal))
-telegram_app.add_handler(CallbackQueryHandler(buttons))
-telegram_app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL, media_handler))
+def main():
+    application = Application.builder().token(BOT_TOKEN).build()
 
-# ================= FLASK =================
-@app.route("/")
-def home():
-    return "PesaMatrix Bot Running"
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("signal", signal))
+    application.add_handler(CommandHandler("admin", admin))
+    application.add_handler(CallbackQueryHandler(buttons))
+
+    print("🤖 Bot is running...")
+    application.run_polling()
 
 # ================= RUN =================
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    main()
